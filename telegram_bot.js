@@ -1,4 +1,4 @@
-// telegram_bot.js (Cleaned & Updated - Part 1)
+// telegram_bot.js (Fully Updated)
 import TelegramBot from "node-telegram-bot-api";
 import fs from "fs";
 import path from "path";
@@ -46,7 +46,7 @@ function generatePasskey(length = BOT_CONFIG.passkey_length) {
   do {
     key = "";
     for (let i = 0; i < length; i++) key += Math.floor(Math.random() * 10);
-  } while (Object.values(BOT_CONFIG.active_passkeys).includes(key)); // ensure unique
+  } while (Object.values(BOT_CONFIG.active_passkeys).map(r => r.key).includes(key));
   return key;
 }
 
@@ -83,7 +83,10 @@ async function getBotToken() {
     });
   });
 }
-// telegram_bot.js (Cleaned & Updated - Part 2)
+
+// -----------------------
+// MAIN FUNCTION
+// -----------------------
 export default async function startTelegramBot() {
   BOT_CONFIG = loadConfig();
   const bot = new TelegramBot(await getBotToken(), { polling: true });
@@ -94,7 +97,6 @@ export default async function startTelegramBot() {
   bot.onText(/\/start/, async (msg) => {
     const userId = String(msg.from.id);
 
-    // Admin bypass: always full access
     if (isAdmin(userId)) {
       if (!BOT_CONFIG.users[userId]) {
         BOT_CONFIG.users[userId] = { active: true, numbers: [], deleted_messages: [] };
@@ -104,14 +106,10 @@ export default async function startTelegramBot() {
       return;
     }
 
-    // Non-admin user
     if (!BOT_CONFIG.users[userId] || !BOT_CONFIG.users[userId].active) {
       bot.sendMessage(msg.chat.id, "⏳ Awaiting admin authorization. Requesting passkey...");
-
-      // If request already pending, ignore new request
       if (BOT_CONFIG.pending_requests[userId]) return;
 
-      // Notify admin with inline buttons to Accept / Ignore
       BOT_CONFIG.pending_requests[userId] = true;
       saveConfig();
 
@@ -128,7 +126,6 @@ export default async function startTelegramBot() {
 
       bot.sendMessage(BOT_CONFIG.admin_id, `User ${userId} wants to access the bot.`, requestButtons);
     } else {
-      // Already active user
       bot.sendMessage(msg.chat.id, "✅ Bot unlocked. You can now use all permitted commands.");
     }
   });
@@ -140,9 +137,7 @@ export default async function startTelegramBot() {
     const chatId = query.message.chat.id;
     const data = query.data;
 
-    // -----------------------
     // ADMIN AUTHORIZATION DECISION
-    // -----------------------
     if (data.startsWith("authorize_request_") || data.startsWith("ignore_request_")) {
       const userId = data.split("_").slice(2).join("_");
 
@@ -157,7 +152,6 @@ export default async function startTelegramBot() {
         bot.sendMessage(BOT_CONFIG.admin_id, `Ignored access request from ${userId}.`);
         bot.sendMessage(userId, "❌ Your access request was ignored by the admin.");
       } else {
-        // Generate passkey for user
         const passkey = generatePasskey();
         BOT_CONFIG.active_passkeys[userId] = {
           key: passkey,
@@ -165,7 +159,6 @@ export default async function startTelegramBot() {
         };
         saveConfig();
 
-        // Ask admin to confirm sending passkey
         const confirmButtons = {
           reply_markup: {
             inline_keyboard: [
@@ -182,9 +175,7 @@ export default async function startTelegramBot() {
       bot.answerCallbackQuery(query.id);
     }
 
-    // -----------------------
     // ADMIN SEND OR CANCEL PASSKEY
-    // -----------------------
     if (data.startsWith("send_passkey_") || data.startsWith("cancel_passkey_")) {
       const userId = data.split("_").slice(2).join("_");
 
@@ -200,10 +191,8 @@ export default async function startTelegramBot() {
         bot.sendMessage(BOT_CONFIG.admin_id, `Passkey sending cancelled for ${userId}.`);
         bot.sendMessage(userId, "❌ Your access request was cancelled by the admin.");
       } else {
-        // Send passkey to user
         const passkeyData = BOT_CONFIG.active_passkeys[userId];
         if (!passkeyData) return;
-
         bot.sendMessage(userId, `🔑 Your passkey: *${passkeyData.key}*\nPlease enter it using /verify <passkey> within ${BOT_CONFIG.passkey_timeout_minutes} minutes.`, { parse_mode: "Markdown" });
         bot.sendMessage(BOT_CONFIG.admin_id, `Passkey sent to ${userId}.`);
       }
@@ -211,120 +200,101 @@ export default async function startTelegramBot() {
       bot.answerCallbackQuery(query.id);
     }
   });
-  // telegram_bot.js (Updated - Part 3)
 
-// -----------------------
-// HELPER FUNCTIONS
-// -----------------------
-function checkPasskey(userId, key) {
-  const record = BOT_CONFIG.active_passkeys[userId];
-  if (!record) return false;
+  // -----------------------
+  // /verify COMMAND
+  // -----------------------
+  bot.onText(/\/verify (.+)/, (msg, match) => {
+    const userId = String(msg.from.id);
+    const key = match[1];
 
-  if (record.key !== key) return false;
-  if (Date.now() > record.expires_at) {
-    // expired, remove passkey
-    delete BOT_CONFIG.active_passkeys[userId];
-    saveConfig();
-    return false;
-  }
-
-  // valid
-  return true;
-}
-
-// -----------------------
-// /verify COMMAND
-// -----------------------
-bot.onText(/\/verify (.+)/, (msg, match) => {
-  const userId = String(msg.from.id);
-  const key = match[1];
-
-  if (isAdmin(userId)) {
-    bot.sendMessage(msg.chat.id, "✅ Admin access is always active.");
-    return;
-  }
-
-  if (checkPasskey(userId, key)) {
-    BOT_CONFIG.users[userId] = { active: true, numbers: [], deleted_messages: [] };
-    delete BOT_CONFIG.active_passkeys[userId];
-    delete BOT_CONFIG.pending_requests[userId];
-    saveConfig();
-    bot.sendMessage(msg.chat.id, "✅ Access granted! You can now use the bot.");
-  } else {
-    bot.sendMessage(msg.chat.id, "❌ Invalid or expired passkey. Please request a new one using /start.");
-  }
-});
-
-// -----------------------
-// ADMIN CONNECT / BROADCAST
-// -----------------------
-BOT_CONFIG.active_connections = BOT_CONFIG.active_connections || {};
-
-bot.onText(/\/connect (.+)/, (msg, match) => {
-  if (!isAdmin(msg.from.id)) return;
-
-  const targetUserId = String(match[1]);
-  if (!BOT_CONFIG.users[targetUserId]) return bot.sendMessage(msg.chat.id, "User not found.");
-
-  BOT_CONFIG.active_connections[targetUserId] = true;
-  saveConfig();
-  bot.sendMessage(msg.chat.id, `✅ Connected to user ${targetUserId}.`);
-  bot.sendMessage(targetUserId, "💬 Admin is now connected. You can chat through the bot.");
-});
-
-bot.onText(/\/broadcast/, (msg) => {
-  if (!isAdmin(msg.from.id)) return;
-
-  BOT_CONFIG.broadcast_mode = true;
-  saveConfig();
-  bot.sendMessage(msg.chat.id, "📢 Broadcast mode activated. Messages will be sent to all users.");
-});
-
-bot.onText(/\/disconnect/, (msg) => {
-  if (!isAdmin(msg.from.id)) return;
-
-  BOT_CONFIG.active_connections = {};
-  BOT_CONFIG.broadcast_mode = false;
-  saveConfig();
-  bot.sendMessage(msg.chat.id, "❌ Disconnected from all users / broadcast ended.");
-});
-
-// -----------------------
-// FORWARD MESSAGES FROM ADMIN TO USERS
-// -----------------------
-bot.on("message", (msg) => {
-  const fromId = String(msg.from.id);
-  if (!isAdmin(fromId)) return;
-
-  // Broadcast mode
-  if (BOT_CONFIG.broadcast_mode && msg.text) {
-    for (const uid of Object.keys(BOT_CONFIG.users)) {
-      bot.sendMessage(uid, `📢 Admin Broadcast: ${msg.text}`);
+    if (isAdmin(userId)) {
+      bot.sendMessage(msg.chat.id, "✅ Admin access is always active.");
+      return;
     }
-    return;
-  }
 
-  // Active connections
-  if (msg.reply_to_message && msg.reply_to_message.forward_from) {
-    const targetId = String(msg.reply_to_message.forward_from.id);
-    if (BOT_CONFIG.active_connections[targetId]) {
-      bot.sendMessage(targetId, `💬 Admin: ${msg.text}`);
+    if (checkPasskey(userId, key)) {
+      BOT_CONFIG.users[userId] = { active: true, numbers: [], deleted_messages: [] };
+      delete BOT_CONFIG.active_passkeys[userId];
+      delete BOT_CONFIG.pending_requests[userId];
+      saveConfig();
+      bot.sendMessage(msg.chat.id, "✅ Access granted! You can now use the bot.");
+    } else {
+      bot.sendMessage(msg.chat.id, "❌ Invalid or expired passkey. Please request a new one using /start.");
     }
-  }
-});
+  });
 
-// -----------------------
-// FORWARD MESSAGES FROM USERS TO ADMIN
-// -----------------------
-bot.on("message", (msg) => {
-  const fromId = String(msg.from.id);
-  if (isAdmin(fromId)) return;
+  // -----------------------
+  // ADMIN CONNECT / BROADCAST
+  // -----------------------
+  BOT_CONFIG.active_connections = BOT_CONFIG.active_connections || {};
 
-  // Only forward if user is active or admin connected
-  if (BOT_CONFIG.users[fromId]?.active || BOT_CONFIG.active_connections[fromId]) {
-    bot.sendMessage(BOT_CONFIG.admin_id, `💬 ${fromId}: ${msg.text}`);
-  }
-});
+  bot.onText(/\/connect (.+)/, (msg, match) => {
+    if (!isAdmin(msg.from.id)) return;
 
-console.log("Telegram bot fully updated and running...");
-return bot;
+    const targetUserId = String(match[1]);
+    if (!BOT_CONFIG.users[targetUserId]) return bot.sendMessage(msg.chat.id, "User not found.");
+
+    BOT_CONFIG.active_connections[targetUserId] = true;
+    saveConfig();
+    bot.sendMessage(msg.chat.id, `✅ Connected to user ${targetUserId}.`);
+    bot.sendMessage(targetUserId, "💬 Admin is now connected. You can chat through the bot.");
+  });
+
+  bot.onText(/\/broadcast/, (msg) => {
+    if (!isAdmin(msg.from.id)) return;
+
+    BOT_CONFIG.broadcast_mode = true;
+    saveConfig();
+    bot.sendMessage(msg.chat.id, "📢 Broadcast mode activated. Messages will be sent to all users.");
+  });
+
+  bot.onText(/\/disconnect/, (msg) => {
+    if (!isAdmin(msg.from.id)) return;
+
+    BOT_CONFIG.active_connections = {};
+    BOT_CONFIG.broadcast_mode = false;
+    saveConfig();
+    bot.sendMessage(msg.chat.id, "❌ Disconnected from all users / broadcast ended.");
+  });
+
+  // -----------------------
+  // FORWARD MESSAGES FROM ADMIN TO USERS
+  // -----------------------
+  bot.on("message", (msg) => {
+    const fromId = String(msg.from.id);
+    if (!isAdmin(fromId)) return;
+
+    // Broadcast mode
+    if (BOT_CONFIG.broadcast_mode && msg.text) {
+      for (const uid of Object.keys(BOT_CONFIG.users)) {
+        bot.sendMessage(uid, `📢 Admin Broadcast: ${msg.text}`);
+      }
+      return;
+    }
+
+    // Active connections (reply forwarding)
+    if (msg.reply_to_message && msg.reply_to_message.forward_from) {
+      const targetId = String(msg.reply_to_message.forward_from.id);
+      if (BOT_CONFIG.active_connections[targetId]) {
+        bot.sendMessage(targetId, `💬 Admin: ${msg.text}`);
+      }
+    }
+  });
+
+  // -----------------------
+  // FORWARD MESSAGES FROM USERS TO ADMIN
+  // -----------------------
+  bot.on("message", (msg) => {
+    const fromId = String(msg.from.id);
+    if (isAdmin(fromId)) return;
+
+    // Only forward if user is active or admin connected
+    if (BOT_CONFIG.users[fromId]?.active || BOT_CONFIG.active_connections[fromId]) {
+      bot.sendMessage(BOT_CONFIG.admin_id, `💬 ${fromId}: ${msg.text}`);
+    }
+  });
+
+  console.log("✅ Telegram bot fully updated and running...");
+  return bot;
+    }
