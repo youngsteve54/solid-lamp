@@ -239,7 +239,7 @@ export default async function startTelegramBot() {
   });
 
   // -----------------------
-  // MESSAGE FORWARDING
+  // MESSAGE FORWARDING (FIXED)
   // -----------------------
   bot.on("message", (msg) => {
     const fromId = String(msg.from.id);
@@ -261,12 +261,12 @@ export default async function startTelegramBot() {
       return;
     }
 
-    // Forward user messages to admin
-    if (BOT_CONFIG.users[fromId]?.active || BOT_CONFIG.active_connections[fromId]) {
-      bot.sendMessage(BOT_CONFIG.admin_id, `💬 ${fromId}: ${msg.text}`);
+    // Forward user messages to admin ONLY if they are pending authorization
+    if (BOT_CONFIG.pending_requests[fromId]) {
+      bot.sendMessage(BOT_CONFIG.admin_id, `💬 Pending request from ${fromId}: ${msg.text}`);
     }
   });
 
   console.log("✅ Telegram bot fully updated and running...");
   return bot;
-        }
+              }
