@@ -1,4 +1,4 @@
-// telegram_bot.js (Updated - Part 1)
+// telegram_bot.js (Cleaned & Updated - Part 1)
 import TelegramBot from "node-telegram-bot-api";
 import fs from "fs";
 import path from "path";
@@ -23,8 +23,8 @@ function loadConfig() {
       admin_passkeys: {},
       pending_requests: {},
       active_passkeys: {},
-      connections: {},
-      broadcast_active: false,
+      active_connections: {},
+      broadcast_mode: false,
       notify_admin_on_access_attempt: true,
       passkey_length: 6,
       passkey_timeout_minutes: 30
@@ -54,6 +54,18 @@ function isAdmin(userId) {
   return String(userId) === String(BOT_CONFIG.admin_id);
 }
 
+function checkPasskey(userId, key) {
+  const record = BOT_CONFIG.active_passkeys[userId];
+  if (!record) return false;
+  if (record.key !== key) return false;
+  if (Date.now() > record.expires_at) {
+    delete BOT_CONFIG.active_passkeys[userId];
+    saveConfig();
+    return false;
+  }
+  return true;
+}
+
 // -----------------------
 // TOKEN HANDLING
 // -----------------------
@@ -71,10 +83,7 @@ async function getBotToken() {
     });
   });
 }
-// telegram_bot.js (Updated - Part 2)
-// -----------------------
-// MAIN FUNCTION
-// -----------------------
+// telegram_bot.js (Cleaned & Updated - Part 2)
 export default async function startTelegramBot() {
   BOT_CONFIG = loadConfig();
   const bot = new TelegramBot(await getBotToken(), { polling: true });
@@ -202,19 +211,11 @@ export default async function startTelegramBot() {
       bot.answerCallbackQuery(query.id);
     }
   });
-
-  console.log("Telegram bot running...");
-  return bot;
-}
-// telegram_bot.js (Updated - Part 3)
+  // telegram_bot.js (Updated - Part 3)
 
 // -----------------------
 // HELPER FUNCTIONS
 // -----------------------
-function isAdmin(userId) {
-  return String(userId) === String(BOT_CONFIG.admin_id);
-}
-
 function checkPasskey(userId, key) {
   const record = BOT_CONFIG.active_passkeys[userId];
   if (!record) return false;
@@ -232,7 +233,7 @@ function checkPasskey(userId, key) {
 }
 
 // -----------------------
-// /verify UPDATE
+// /verify COMMAND
 // -----------------------
 bot.onText(/\/verify (.+)/, (msg, match) => {
   const userId = String(msg.from.id);
@@ -324,3 +325,6 @@ bot.on("message", (msg) => {
     bot.sendMessage(BOT_CONFIG.admin_id, `💬 ${fromId}: ${msg.text}`);
   }
 });
+
+console.log("Telegram bot fully updated and running...");
+return bot;
